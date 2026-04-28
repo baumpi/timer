@@ -1,0 +1,22 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Build artifacts
+build/
+
+# macOS
+.DS_Store
+
+# Xcode (just in case anyone opens it)
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Editor
+.vscode/
+.idea/
+
+# Logs / temp
+*.log
+*.tmp
