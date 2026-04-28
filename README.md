@@ -1,21 +1,32 @@
 # Wura Timer
 
-Bühnen-Timer im KI-Austria-Look. Native macOS-App (Apple Silicon), riesige Ziffern, drei klare Buttons.
+Minimalistischer Bühnen-Timer im KI-Austria-Look. Native macOS-App für Apple Silicon mit riesigen Ziffern, Stopwatch, Countdown, Mini Mode und echtem macOS-Vollbild.
 
 ## Installieren
+
+1. `Wura Timer.dmg` aus den GitHub Releases laden.
+2. DMG doppelklicken.
+3. Im Fenster die App auf **Applications** ziehen.
+4. DMG auswerfen.
+5. **Erster Start (Gatekeeper-Hinweis):** Da die App ad-hoc signiert ist (kein Apple-Developer-Zertifikat), kommt beim ersten Öffnen "Wura Timer konnte nicht geprüft werden". -> **Rechtsklick** auf die App -> **Öffnen** -> **Öffnen** bestätigen. Danach läuft sie normal.
+
+Lokaler Build:
 
 1. `build/Wura Timer.dmg` doppelklicken.
 2. Im Fenster die App auf **Applications** ziehen.
 3. DMG auswerfen.
-4. **Erster Start (Gatekeeper-Hinweis):** Da die App ad-hoc signiert ist (kein Apple-Developer-Zertifikat), kommt beim ersten Öffnen "Wura Timer konnte nicht geprüft werden". → **Rechtsklick** auf die App → **Öffnen** → **Öffnen** bestätigen. Danach läuft sie immer normal.
+4. Beim ersten Start denselben Gatekeeper-Hinweis wie oben bestätigen.
 
 > Falls du die alte "Timer BrainRead.app" noch im Applications-Ordner hast: einfach in den Papierkorb. Die neue App hat einen anderen Bundle Identifier (`at.wura.timer`), läuft also unabhängig daneben.
 
 ## Features
 
 - **Stopwatch** und **Countdown** umschaltbar (oben links).
-- **Light/Dark-Toggle** oben rechts (☀ LIGHT / ☾ DARK), Einstellung wird gemerkt.
-- Riesige MM:SS-Ziffern in JetBrains Mono — skaliert mit Fenster, projector-ready.
+- **Start/Stop**, **Reset**, Stopwatch-Laps und Countdown-Presets.
+- **Mini Mode** mit Pin, Play/Pause und Exit-Mini.
+- **Echtes macOS-Vollbild** per Button, Taste oder Ampel.
+- **Always on top**, **Light/Dark**, Countdown-Loop und Sound-Toggle.
+- Riesige MM:SS-Ziffern in JetBrains Mono, skaliert mit Fenster, projector-ready.
 - Countdown wird in der letzten Minute rot. Bei 00:00 pulsiert der Rahmen + System-Sound.
 - Alle Farben/Fonts aus dem KI-Austria-Design-Kit v3.
 
@@ -25,7 +36,10 @@ Bühnen-Timer im KI-Austria-Look. Native macOS-App (Apple Silicon), riesige Ziff
 |-----------|--------------------|
 | `Space`   | Start / Stop       |
 | `R`       | Reset              |
+| `M`       | Stopwatch / Countdown |
 | `F`       | Vollbild           |
+| `I`       | Mini Mode          |
+| `T`       | Always on top      |
 | `L`       | Light/Dark wechseln|
 | `+` / `-` | Countdown ±1 min   |
 
@@ -59,8 +73,9 @@ Sources/TimerBrainRead/
 ├── DesignSystem.swift        KI-Austria Palette (dark + light), Fonts
 └── Components/
     ├── BigClockView.swift    Auto-skalierende MM:SS-Anzeige
+    ├── IconToggle.swift      Icon-only und Pill-Toggles
     ├── ControlButton.swift   Primary/Secondary Button (ButtonStyle)
-    └── ModeToggle.swift      Stopwatch↔Countdown + Theme-Toggle
+    └── ModeToggle.swift      Stopwatch↔Countdown
 Resources/
 ├── Info.plist
 ├── AppIcon.icns

@@ -10,6 +10,8 @@ struct ContentView: View {
     @AppStorage("alwaysOnTop")      private var alwaysOnTop: Bool = false
     @AppStorage("miniMode")         private var miniMode: Bool = false
     @AppStorage("soundEnabled")     private var soundEnabled: Bool = true
+    @State private var isFullscreen: Bool = false
+    @State private var fullscreenRequestID: Int = 0
     @FocusState private var keyFocus: Bool
 
     private var palette: Palette { Palette.from(theme) }
@@ -39,7 +41,9 @@ struct ContentView: View {
         )
         .environment(\.palette, palette)
         .background(WindowAccessor(palette: palette, theme: theme,
-                                   alwaysOnTop: alwaysOnTop, miniMode: miniMode))
+                                   alwaysOnTop: alwaysOnTop, miniMode: miniMode,
+                                   fullscreenRequestID: fullscreenRequestID,
+                                   onFullscreenChange: handleFullscreenChange))
         .onAppear {
             BundledFonts.register()
             engine.repeats = repeats
@@ -71,10 +75,10 @@ struct ContentView: View {
         case "r":       engine.reset();               return .handled
         case "m":       engine.mode = (engine.mode == .stopwatch) ? .countdown : .stopwatch
                                                       ; return .handled
-        case "f":       NSApp.keyWindow?.toggleFullScreen(nil); return .handled
+        case "f":       toggleFullscreen();           return .handled
         case "l":       theme = (theme == .dark) ? .light : .dark; return .handled
         case "t":       alwaysOnTop.toggle();         return .handled
-        case "i":       miniMode.toggle();            return .handled
+        case "i":       toggleMiniMode();             return .handled
         case "?":       showShortcuts.toggle();       return .handled
         case "+", "=":  engine.adjustCountdown(by:  Countdown.stepSeconds); return .handled
         case "-", "_":  engine.adjustCountdown(by: -Countdown.stepSeconds); return .handled
@@ -125,7 +129,11 @@ struct ContentView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
 
-            HStack(spacing: 6) { pinToggle; miniToggle }
+            HStack(spacing: 6) {
+                pinToggle
+                miniPlayToggle
+                miniToggle
+            }
                 .padding(.top, 8)
                 .padding(.trailing, 8)
         }
@@ -147,6 +155,7 @@ struct ContentView: View {
             }
             helpToggle
             pinToggle
+            fullscreenToggle
             miniToggle
             themeToggle
         }
@@ -176,11 +185,31 @@ struct ContentView: View {
 
     private var miniToggle: some View {
         IconToggle(
-            isOn: $miniMode,
-            symbol: "arrow.down.right.and.arrow.up.left",
-            activeSymbol: "arrow.up.left.and.arrow.down.right",
+            isOn: miniModeBinding,
+            symbol: "minus",
+            activeSymbol: "plus",
             accentWhenOn: false,
             help: miniMode ? "Exit mini mode (I)" : "Mini mode — only digits (I)"
+        )
+    }
+
+    private var miniPlayToggle: some View {
+        iconButton(
+            symbol: engine.isRunning ? "pause.fill" : "play.fill",
+            isActive: engine.isRunning,
+            help: engine.isRunning ? "Pause timer (Space)" : "Start timer (Space)"
+        ) {
+            engine.toggle()
+        }
+    }
+
+    private var fullscreenToggle: some View {
+        IconToggle(
+            isOn: fullscreenBinding,
+            symbol: "arrow.up.left.and.arrow.down.right",
+            activeSymbol: "arrow.down.right.and.arrow.up.left",
+            accentWhenOn: false,
+            help: isFullscreen ? "Exit full screen (F)" : "Enter full screen (F)"
         )
     }
 
@@ -355,6 +384,70 @@ struct ContentView: View {
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.4 : 1)
     }
+
+    private var fullscreenBinding: Binding<Bool> {
+        Binding(
+            get: { isFullscreen },
+            set: { target in
+                guard target != isFullscreen else { return }
+                toggleFullscreen()
+            }
+        )
+    }
+
+    private var miniModeBinding: Binding<Bool> {
+        Binding(
+            get: { miniMode },
+            set: { target in
+                guard target != miniMode else { return }
+                toggleMiniMode()
+            }
+        )
+    }
+
+    private func iconButton(
+        symbol: String,
+        isActive: Bool = false,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: Layout.iconFontSize, weight: .semibold))
+                .frame(width: Layout.toggleIconSize, height: Layout.toggleIconSize)
+                .background(isActive ? palette.toggleActiveBG : palette.bgSurface)
+                .foregroundStyle(isActive ? palette.accentText : palette.textSecondary)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Layout.cornerRadiusSm)
+                        .stroke(palette.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadiusSm))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func toggleMiniMode() {
+        if isFullscreen {
+            toggleFullscreen()
+            return
+        }
+        miniMode.toggle()
+    }
+
+    private func toggleFullscreen() {
+        if miniMode {
+            miniMode = false
+        }
+        fullscreenRequestID += 1
+    }
+
+    private func handleFullscreenChange(_ fullscreen: Bool) {
+        isFullscreen = fullscreen
+        if fullscreen && miniMode {
+            miniMode = false
+        }
+    }
 }
 
 // MARK: - Window styling
@@ -364,13 +457,62 @@ struct WindowAccessor: NSViewRepresentable {
     let theme: ThemeMode
     let alwaysOnTop: Bool
     let miniMode: Bool
+    let fullscreenRequestID: Int
+    let onFullscreenChange: (Bool) -> Void
 
     final class Coordinator {
         var didSetupOnce = false
         var lastTheme: ThemeMode?
         var lastOnTop: Bool?
         var lastMini: Bool?
+        var lastAppliedFullscreen: Bool?
+        var lastFullscreenRequestID: Int = 0
         var savedNormalSize: NSSize?
+        weak var window: NSWindow?
+        var observers: [NSObjectProtocol] = []
+        var onFullscreenChange: ((Bool) -> Void)?
+        var isFullscreen: Bool = false
+
+        deinit {
+            for observer in observers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+        }
+
+        func attach(to window: NSWindow) {
+            guard self.window !== window else { return }
+            for observer in observers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            observers.removeAll()
+            self.window = window
+
+            let center = NotificationCenter.default
+            observers.append(
+                center.addObserver(
+                    forName: NSWindow.didEnterFullScreenNotification,
+                    object: window,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.setFullscreen(true)
+                }
+            )
+            observers.append(
+                center.addObserver(
+                    forName: NSWindow.didExitFullScreenNotification,
+                    object: window,
+                    queue: .main
+                ) { [weak self] _ in
+                    self?.setFullscreen(false)
+                }
+            )
+        }
+
+        func setFullscreen(_ fullscreen: Bool) {
+            guard fullscreen != isFullscreen else { return }
+            isFullscreen = fullscreen
+            onFullscreenChange?(fullscreen)
+        }
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -380,12 +522,20 @@ struct WindowAccessor: NSViewRepresentable {
         let coord = context.coordinator
         DispatchQueue.main.async {
             guard let win = nsView.window else { return }
+            coord.attach(to: win)
+            coord.onFullscreenChange = onFullscreenChange
 
             if !coord.didSetupOnce {
                 win.titleVisibility = .hidden
                 win.titlebarAppearsTransparent = true
                 win.isMovableByWindowBackground = true
+                win.styleMask.insert(.titled)
+                win.styleMask.insert(.closable)
+                win.styleMask.insert(.miniaturizable)
+                win.styleMask.insert(.resizable)
                 win.styleMask.insert(.fullSizeContentView)
+                win.collectionBehavior.insert(.fullScreenPrimary)
+                win.collectionBehavior.remove(.fullScreenAuxiliary)
                 win.minSize = NSSize(width: Layout.normalMinSize.width,
                                      height: Layout.normalMinSize.height)
                 if win.frame.size.width < 1100 {
@@ -396,26 +546,29 @@ struct WindowAccessor: NSViewRepresentable {
                 coord.didSetupOnce = true
             }
 
+            coord.setFullscreen(win.styleMask.contains(.fullScreen))
+
             if coord.lastTheme != theme {
                 win.appearance = theme.nsAppearance
                 win.backgroundColor = palette.nsBackground
                 coord.lastTheme = theme
             }
 
-            if coord.lastOnTop != alwaysOnTop {
-                if alwaysOnTop {
+            if coord.lastOnTop != alwaysOnTop || coord.lastAppliedFullscreen != coord.isFullscreen {
+                if alwaysOnTop && !coord.isFullscreen {
                     win.level = .floating
                     win.collectionBehavior.insert(.canJoinAllSpaces)
-                    win.collectionBehavior.insert(.fullScreenAuxiliary)
                 } else {
                     win.level = .normal
                     win.collectionBehavior.remove(.canJoinAllSpaces)
-                    win.collectionBehavior.remove(.fullScreenAuxiliary)
                 }
+                win.collectionBehavior.insert(.fullScreenPrimary)
+                win.collectionBehavior.remove(.fullScreenAuxiliary)
                 coord.lastOnTop = alwaysOnTop
+                coord.lastAppliedFullscreen = coord.isFullscreen
             }
 
-            if coord.lastMini != miniMode {
+            if coord.lastMini != miniMode && !coord.isFullscreen {
                 if miniMode {
                     coord.savedNormalSize = win.frame.size
                     win.minSize = NSSize(width: Layout.miniMinSize.width,
@@ -435,6 +588,13 @@ struct WindowAccessor: NSViewRepresentable {
                     }
                 }
                 coord.lastMini = miniMode
+            }
+
+            if coord.lastFullscreenRequestID != fullscreenRequestID {
+                coord.lastFullscreenRequestID = fullscreenRequestID
+                win.collectionBehavior.insert(.fullScreenPrimary)
+                win.collectionBehavior.remove(.fullScreenAuxiliary)
+                win.toggleFullScreen(nil)
             }
         }
     }
