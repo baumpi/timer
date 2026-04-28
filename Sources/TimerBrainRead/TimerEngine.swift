@@ -14,12 +14,22 @@ enum TimerMode: String, CaseIterable, Identifiable {
     }
 }
 
+struct StopwatchLap: Identifiable, Equatable {
+    let id = UUID()
+    let index: Int
+    let total: TimeInterval
+    let split: TimeInterval
+}
+
 @MainActor
 final class TimerEngine: ObservableObject {
     @Published var mode: TimerMode = .stopwatch { didSet { reset() } }
     @Published var repeats: Bool = false
     @Published private(set) var isRunning: Bool = false
     @Published private(set) var displaySeconds: TimeInterval = 0
+    @Published private(set) var laps: [StopwatchLap] = []
+    @Published private(set) var completionCount: Int = 0
+    @Published private(set) var isFinished: Bool = false
 
     @Published private var _countdownDuration: TimeInterval = Countdown.defaultSeconds
     var countdownDuration: TimeInterval {
@@ -30,6 +40,7 @@ final class TimerEngine: ObservableObject {
             _countdownDuration = clamped
             UserDefaults.standard.set(clamped, forKey: Self.kDurationKey)
             if !isRunning && mode == .countdown {
+                isFinished = false
                 displaySeconds = clamped
             }
         }
@@ -58,6 +69,7 @@ final class TimerEngine: ObservableObject {
             displaySeconds = countdownDuration
             accumulated = 0
         }
+        isFinished = false
         startedAt = Date()
         isRunning = true
         scheduleTicker()
@@ -81,6 +93,8 @@ final class TimerEngine: ObservableObject {
         startedAt = nil
         accumulated = 0
         isRunning = false
+        isFinished = false
+        laps.removeAll()
         switch mode {
         case .stopwatch: displaySeconds = 0
         case .countdown: displaySeconds = countdownDuration
@@ -88,8 +102,26 @@ final class TimerEngine: ObservableObject {
     }
 
     func adjustCountdown(by deltaSeconds: TimeInterval) {
-        guard mode == .countdown else { return }
+        guard mode == .countdown, !isRunning else { return }
         countdownDuration += deltaSeconds
+    }
+
+    func recordLap() {
+        guard mode == .stopwatch else { return }
+        recompute()
+        guard displaySeconds > 0 else { return }
+        let previousTotal = laps.first?.total ?? 0
+        guard displaySeconds > previousTotal else { return }
+        let lap = StopwatchLap(
+            index: laps.count + 1,
+            total: displaySeconds,
+            split: max(0, displaySeconds - previousTotal)
+        )
+        laps.insert(lap, at: 0)
+    }
+
+    func applyPreset(minutes: Int) {
+        setCountdown(seconds: TimeInterval(minutes * 60))
     }
 
     private func scheduleTicker() {
@@ -107,31 +139,40 @@ final class TimerEngine: ObservableObject {
         let elapsed = accumulated + liveDelta
         switch mode {
         case .stopwatch:
-            displaySeconds = elapsed
+            setDisplaySeconds(elapsed.rounded(.down))
         case .countdown:
             let remaining = countdownDuration - elapsed
             if remaining <= 0 {
-                displaySeconds = 0
-                if isRunning { finishCountdown() }
+                setDisplaySeconds(0)
+                if isRunning { finishCountdown(elapsed: elapsed) }
             } else {
-                displaySeconds = remaining
+                setDisplaySeconds(remaining.rounded(.up))
             }
         }
     }
 
-    private func finishCountdown() {
+    private func finishCountdown(elapsed: TimeInterval) {
+        completionCount += 1
         if repeats {
-            // restart for next interval, keep ticker running
-            accumulated = 0
+            let duration = max(Countdown.minSeconds, countdownDuration)
+            let remainder = elapsed.truncatingRemainder(dividingBy: duration)
+            accumulated = remainder
             startedAt = Date()
-            displaySeconds = countdownDuration
+            setDisplaySeconds((duration - remainder).rounded(.up))
         } else {
             ticker?.invalidate()
             ticker = nil
             startedAt = nil
             isRunning = false
             accumulated = 0
+            isFinished = true
         }
+    }
+
+    private func setDisplaySeconds(_ seconds: TimeInterval) {
+        let value = max(0, seconds)
+        guard value != displaySeconds else { return }
+        displaySeconds = value
     }
 
     /// Set the countdown duration directly from a parsed time. Only effective when paused.
@@ -139,6 +180,7 @@ final class TimerEngine: ObservableObject {
         guard mode == .countdown, !isRunning else { return }
         countdownDuration = seconds
         accumulated = 0
+        isFinished = false
         displaySeconds = countdownDuration
     }
 

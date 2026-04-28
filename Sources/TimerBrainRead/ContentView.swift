@@ -9,10 +9,17 @@ struct ContentView: View {
     @AppStorage("timerMode")        private var savedMode: String = TimerMode.stopwatch.rawValue
     @AppStorage("alwaysOnTop")      private var alwaysOnTop: Bool = false
     @AppStorage("miniMode")         private var miniMode: Bool = false
+    @AppStorage("soundEnabled")     private var soundEnabled: Bool = true
     @FocusState private var keyFocus: Bool
 
     private var palette: Palette { Palette.from(theme) }
     private var clockEditable: Bool { engine.mode == .countdown && !engine.isRunning }
+    private var clockStatus: ClockStatus {
+        guard engine.mode == .countdown else { return .normal }
+        if engine.isFinished { return .finished }
+        if engine.displaySeconds <= Countdown.warningSeconds { return .warning }
+        return .normal
+    }
 
     private var themeIsDark: Binding<Bool> {
         Binding(
@@ -43,6 +50,10 @@ struct ContentView: View {
         }
         .onChange(of: repeats)     { _, newValue in engine.repeats = newValue }
         .onChange(of: engine.mode) { _, newMode  in savedMode = newMode.rawValue }
+        .onChange(of: engine.completionCount) { _, newValue in
+            guard newValue > 0, soundEnabled else { return }
+            NSSound.beep()
+        }
         .focusable()
         .focusEffectDisabled()
         .focused($keyFocus)
@@ -83,13 +94,18 @@ struct ContentView: View {
 
             BigClockView(
                 text: TimerEngine.format(engine.displaySeconds),
+                status: clockStatus,
                 editable: clockEditable,
                 onCommit: { secs in engine.setCountdown(seconds: secs) },
                 onEditingFinished: { keyFocus = true }
             )
             .padding(.horizontal, 32)
 
-            Spacer(minLength: 12)
+            secondaryStrip
+                .padding(.top, 10)
+                .padding(.horizontal, 32)
+
+            Spacer(minLength: 10)
 
             controlBar
                 .padding(.bottom, 32)
@@ -101,6 +117,7 @@ struct ContentView: View {
         ZStack(alignment: .topTrailing) {
             BigClockView(
                 text: TimerEngine.format(engine.displaySeconds),
+                status: clockStatus,
                 editable: clockEditable,
                 onCommit: { secs in engine.setCountdown(seconds: secs) },
                 onEditingFinished: { keyFocus = true }
@@ -121,6 +138,7 @@ struct ContentView: View {
             ModeToggle(mode: $engine.mode)
             if engine.mode == .countdown {
                 loopToggle.transition(.opacity.combined(with: .scale(scale: 0.9)))
+                soundToggle.transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
             Spacer()
             if showShortcuts {
@@ -187,6 +205,16 @@ struct ContentView: View {
         )
     }
 
+    private var soundToggle: some View {
+        IconToggle(
+            isOn: $soundEnabled,
+            symbol: "speaker.slash.fill",
+            activeSymbol: "speaker.wave.2.fill",
+            accentWhenOn: false,
+            help: soundEnabled ? "Sound on at zero" : "Sound off at zero"
+        )
+    }
+
     // MARK: - Shortcut hints row (visible only when ? is on)
 
     private var shortcutHints: some View {
@@ -198,6 +226,7 @@ struct ContentView: View {
             hint("T",     "always on top")
             hint("I",     "mini mode")
             hint("L",     "theme")
+            hint("+/−",   "timer")
         }
         .opacity(0.85)
     }
@@ -225,8 +254,14 @@ struct ContentView: View {
                 ControlButton(title: "−1 MIN", variant: .secondary, minWidth: 110) {
                     engine.adjustCountdown(by: -Countdown.stepSeconds)
                 }
-                .disabled(engine.countdownDuration <= Countdown.stepSeconds)
-                .opacity(engine.countdownDuration <= Countdown.stepSeconds ? 0.4 : 1)
+                .disabled(engine.isRunning || engine.countdownDuration <= Countdown.stepSeconds)
+                .opacity((engine.isRunning || engine.countdownDuration <= Countdown.stepSeconds) ? 0.4 : 1)
+            } else {
+                ControlButton(title: "LAP", variant: .secondary, minWidth: 110) {
+                    engine.recordLap()
+                }
+                .disabled(engine.displaySeconds <= 0)
+                .opacity(engine.displaySeconds <= 0 ? 0.4 : 1)
             }
 
             Spacer(minLength: 0)
@@ -247,8 +282,78 @@ struct ContentView: View {
                 ControlButton(title: "+1 MIN", variant: .secondary, minWidth: 110) {
                     engine.adjustCountdown(by: Countdown.stepSeconds)
                 }
+                .disabled(engine.isRunning || engine.countdownDuration >= Countdown.maxSeconds)
+                .opacity((engine.isRunning || engine.countdownDuration >= Countdown.maxSeconds) ? 0.4 : 1)
+            } else {
+                Color.clear
+                    .frame(width: 110, height: Layout.buttonHeight)
             }
         }
+    }
+
+    // MARK: - Secondary strip
+
+    @ViewBuilder
+    private var secondaryStrip: some View {
+        if engine.mode == .countdown {
+            presetStrip
+        } else if !engine.laps.isEmpty {
+            lapStrip
+        }
+    }
+
+    private var presetStrip: some View {
+        HStack(spacing: 8) {
+            ForEach(Countdown.presetsMinutes, id: \.self) { minutes in
+                compactButton(
+                    title: "\(minutes) MIN",
+                    isSelected: Int(engine.countdownDuration / 60) == minutes && engine.countdownDuration.truncatingRemainder(dividingBy: 60) == 0,
+                    isDisabled: engine.isRunning
+                ) {
+                    engine.applyPreset(minutes: minutes)
+                }
+            }
+        }
+        .frame(height: 30)
+    }
+
+    private var lapStrip: some View {
+        HStack(spacing: 12) {
+            ForEach(engine.laps.prefix(3)) { lap in
+                Text("L\(lap.index) \(TimerEngine.format(lap.split))")
+                    .font(KIFont.tech(11, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(palette.textMuted)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(palette.bgSurface)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(palette.border, lineWidth: 1))
+                    .help("Total \(TimerEngine.format(lap.total))")
+            }
+        }
+        .frame(height: 30)
+    }
+
+    private func compactButton(
+        title: String,
+        isSelected: Bool,
+        isDisabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(KIFont.tech(11, weight: .bold))
+                .tracking(1.5)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .foregroundStyle(isSelected ? palette.accentText : palette.textMuted)
+                .background(isSelected ? palette.toggleActiveBG : palette.bgSurface)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(palette.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.4 : 1)
     }
 }
 

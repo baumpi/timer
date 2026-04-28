@@ -34,4 +34,6 @@ enum Countdown {
     static let maxSeconds: TimeInterval = 99 * 60 + 59  // 99:59
     static let stepSeconds: TimeInterval = 60           // ±1 MIN button
     static let defaultSeconds: TimeInterval = 600       // 10:00
+    static let warningSeconds: TimeInterval = 60
+    static let presetsMinutes = [5, 10, 25]
 }

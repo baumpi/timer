@@ -1,8 +1,15 @@
 import SwiftUI
 import AppKit
 
+enum ClockStatus {
+    case normal
+    case warning
+    case finished
+}
+
 struct BigClockView: View {
     let text: String
+    var status: ClockStatus = .normal
     var editable: Bool = false
     var onCommit: ((TimeInterval) -> Void)? = nil
     var onEditingFinished: (() -> Void)? = nil
@@ -10,6 +17,7 @@ struct BigClockView: View {
     @Environment(\.palette) private var palette
     @State private var editing: Bool = false
     @State private var draft: String = ""
+    @State private var finishedPulse: Bool = false
     @FocusState private var fieldFocus: Bool
 
     var body: some View {
@@ -27,7 +35,7 @@ struct BigClockView: View {
                         .textFieldStyle(.plain)
                         .font(KIFont.tech(size, weight: .bold))
                         .multilineTextAlignment(.center)
-                        .foregroundStyle(palette.textPrimary)
+                        .foregroundStyle(clockColor)
                         .focused($fieldFocus)
                         .onSubmit { commit() }
                         .onExitCommand { cancel() }
@@ -39,8 +47,7 @@ struct BigClockView: View {
                     Text(text)
                         .font(KIFont.tech(size, weight: .bold))
                         .monospacedDigit()
-                        .kerning(-size * 0.02)
-                        .foregroundStyle(palette.textPrimary)
+                        .foregroundStyle(clockColor)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentTransition(.numericText())
                         .animation(.easeOut(duration: 0.15), value: text)
@@ -54,10 +61,44 @@ struct BigClockView: View {
                 }
             }
             .frame(width: w, height: h)
+            .overlay(finishedBorder)
             .onChange(of: editable) { _, newValue in
                 if !newValue && editing { cancel() }
             }
+            .onChange(of: status) { _, newValue in
+                updatePulse(for: newValue)
+            }
+            .onAppear {
+                updatePulse(for: status)
+            }
         }
+    }
+
+    private var clockColor: Color {
+        switch status {
+        case .normal:
+            return palette.textPrimary
+        case .warning, .finished:
+            return palette.accentText
+        }
+    }
+
+    @ViewBuilder
+    private var finishedBorder: some View {
+        if status == .finished {
+            RoundedRectangle(cornerRadius: Layout.cornerRadiusLg)
+                .stroke(palette.accent, lineWidth: 2)
+                .opacity(finishedPulse ? 0.9 : 0.25)
+                .animation(
+                    .easeInOut(duration: 0.8).repeatForever(autoreverses: true),
+                    value: finishedPulse
+                )
+                .padding(6)
+        }
+    }
+
+    private func updatePulse(for status: ClockStatus) {
+        finishedPulse = status == .finished
     }
 
     private func beginEdit() {
