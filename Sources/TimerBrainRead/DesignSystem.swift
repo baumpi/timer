@@ -8,6 +8,20 @@ extension Color {
         let b = Double( hex        & 0xFF) / 255.0
         self.init(.sRGB, red: r, green: g, blue: b, opacity: opacity)
     }
+
+    /// Round-trip a Color through sRGB and pack into `0xRRGGBB`. Used to persist
+    /// the user-picked menu bar tint in UserDefaults via @AppStorage<Int>.
+    var srgbHex: UInt32 {
+        let ns = NSColor(self).usingColorSpace(.sRGB) ?? .gray
+        let clamp: (CGFloat) -> UInt32 = { UInt32(max(0, min(255, Int($0 * 255)))) }
+        return (clamp(ns.redComponent) << 16)
+             | (clamp(ns.greenComponent) << 8)
+             |  clamp(ns.blueComponent)
+    }
+
+    /// Brand accent. Theme-independent — used by menu bar surfaces that render
+    /// outside the `\.palette` environment (status item label, accents).
+    static let brandAccent = Color(hex: 0xC41E3A)
 }
 
 enum ThemeMode: String, CaseIterable {

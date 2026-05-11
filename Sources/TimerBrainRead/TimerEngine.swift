@@ -23,8 +23,17 @@ struct StopwatchLap: Identifiable, Equatable {
 
 @MainActor
 final class TimerEngine: ObservableObject {
-    @Published var mode: TimerMode = .stopwatch { didSet { reset() } }
-    @Published var repeats: Bool = false
+    @Published var mode: TimerMode = .stopwatch {
+        didSet {
+            UserDefaults.standard.set(mode.rawValue, forKey: Defaults.timerMode)
+            reset()
+        }
+    }
+    @Published var repeats: Bool = false {
+        didSet {
+            UserDefaults.standard.set(repeats, forKey: Defaults.countdownRepeats)
+        }
+    }
     @Published private(set) var isRunning: Bool = false
     @Published private(set) var displaySeconds: TimeInterval = 0
     @Published private(set) var laps: [StopwatchLap] = []
@@ -38,7 +47,7 @@ final class TimerEngine: ObservableObject {
             let clamped = max(Countdown.minSeconds, min(newValue, Countdown.maxSeconds))
             guard clamped != _countdownDuration else { return }
             _countdownDuration = clamped
-            UserDefaults.standard.set(clamped, forKey: Self.kDurationKey)
+            UserDefaults.standard.set(clamped, forKey: Defaults.countdownDuration)
             if !isRunning && mode == .countdown {
                 isFinished = false
                 displaySeconds = clamped
@@ -46,12 +55,32 @@ final class TimerEngine: ObservableObject {
         }
     }
 
-    private static let kDurationKey = "countdownDurationSecs"
+    /// Fraction of countdown time remaining (1 = full, 0 = empty).
+    /// Returns 1 when not in countdown mode or duration is invalid.
+    var countdownRemainingRatio: Double {
+        guard mode == .countdown, _countdownDuration > 0 else { return 1 }
+        return max(0, min(1, displaySeconds / _countdownDuration))
+    }
 
     init() {
-        let saved = UserDefaults.standard.double(forKey: Self.kDurationKey)
-        if saved >= Countdown.minSeconds && saved <= Countdown.maxSeconds {
-            self._countdownDuration = saved
+        let defaults = UserDefaults.standard
+
+        let savedDuration = defaults.double(forKey: Defaults.countdownDuration)
+        if savedDuration >= Countdown.minSeconds && savedDuration <= Countdown.maxSeconds {
+            self._countdownDuration = savedDuration
+        }
+
+        // Only assign when the persisted value differs from the property's
+        // default — otherwise we'd trigger didSet (and a no-op UserDefaults
+        // write-back + reset()) on every launch.
+        if let raw = defaults.string(forKey: Defaults.timerMode),
+           let saved = TimerMode(rawValue: raw),
+           saved != mode {
+            self.mode = saved   // didSet → reset() → seeds displaySeconds
+        }
+        if defaults.object(forKey: Defaults.countdownRepeats) != nil {
+            let saved = defaults.bool(forKey: Defaults.countdownRepeats)
+            if saved != repeats { self.repeats = saved }
         }
     }
 
@@ -184,39 +213,49 @@ final class TimerEngine: ObservableObject {
         displaySeconds = countdownDuration
     }
 
-    /// Parse a time string into seconds. Accepts:
+    /// Parse a time string into seconds. Designed to be maximally permissive:
     ///   "5:30"   → 5 min 30 sec
     ///   "5:"     → 5 min
     ///   ":30"    → 30 sec
-    ///   "0001"   → 1 sec   (digit-pad, last 2 digits = seconds)
-    ///   "30"     → 30 sec
-    ///   "100"    → 1 min
+    ///   "0:90"   → 90 sec    (seconds can exceed 59; normalized via total)
+    ///   "10"     → 10 sec    (1–2 digits = pure seconds, including 60–99)
+    ///   "60"     → 60 sec
+    ///   "100"    → 1 min     (3+ digits = MM:SS packed)
     ///   "1230"   → 12 min 30 sec
-    /// Returns nil if malformed or out of range.
+    ///   "00:10"  → 10 sec
+    /// Returns nil only if the input is empty, non-numeric, or the resulting
+    /// total falls outside `Countdown.minSeconds…Countdown.maxSeconds`.
     static func parseTime(_ s: String) -> TimeInterval? {
         let trimmed = s.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
 
+        let total: TimeInterval
         if trimmed.contains(":") {
             let parts = trimmed.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
             guard parts.count == 2 else { return nil }
             let mmStr = parts[0].isEmpty ? "0" : parts[0]
             let ssStr = parts[1].isEmpty ? "0" : parts[1]
             guard let mm = Int(mmStr), let ss = Int(ssStr),
-                  mm >= 0, mm <= 99, ss >= 0, ss < 60 else { return nil }
-            let total = TimeInterval(mm * 60 + ss)
-            guard total >= Countdown.minSeconds, total <= Countdown.maxSeconds else { return nil }
-            return total
+                  mm >= 0, ss >= 0 else { return nil }
+            total = TimeInterval(mm * 60 + ss)
+        } else {
+            let digits = trimmed.filter(\.isNumber)
+            guard digits.count == trimmed.count, !digits.isEmpty else { return nil }
+
+            if digits.count <= 2 {
+                // 1–2 digit input is always pure seconds. "60" → 60s, "99" → 99s.
+                guard let secs = Int(digits) else { return nil }
+                total = TimeInterval(secs)
+            } else {
+                // 3+ digits: last 4 digits packed as MMSS.
+                let padded = digits.count >= 4 ? String(digits.suffix(4))
+                                               : String(repeating: "0", count: 4 - digits.count) + digits
+                guard let mm = Int(padded.prefix(2)),
+                      let ss = Int(padded.suffix(2)) else { return nil }
+                total = TimeInterval(mm * 60 + ss)
+            }
         }
 
-        // Digit-only: pad-from-left so last 2 digits = seconds, rest = minutes.
-        let digits = trimmed.filter(\.isNumber)
-        guard digits.count == trimmed.count, !digits.isEmpty else { return nil }
-        let padded = digits.count >= 4 ? String(digits.suffix(4))
-                                       : String(repeating: "0", count: 4 - digits.count) + digits
-        guard let mm = Int(padded.prefix(2)),
-              let ss = Int(padded.suffix(2)) else { return nil }
-        let total = TimeInterval(mm * 60 + ss)   // ss may be ≥60; we normalize via total
         guard total >= Countdown.minSeconds, total <= Countdown.maxSeconds else { return nil }
         return total
     }

@@ -50,7 +50,7 @@ struct BigClockView: View {
                         .foregroundStyle(clockColor)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentTransition(.numericText())
-                        .animation(.easeOut(duration: 0.15), value: text)
+                        .animation(.easeOut(duration: 0.25), value: text)
                         .onHover { hovering in
                             if editable { hovering ? NSCursor.iBeam.push() : NSCursor.pop() }
                         }
