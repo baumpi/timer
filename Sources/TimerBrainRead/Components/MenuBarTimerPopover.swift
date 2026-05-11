@@ -6,11 +6,7 @@ import AppKit
 struct MenuBarTimerPopover: View {
     @EnvironmentObject private var engine: TimerEngine
     @Environment(\.palette) private var palette
-
-    @EnvironmentObject private var tintStore: TintStore
-
-    @AppStorage(Defaults.themeMode)    private var theme: ThemeMode = .dark
-    @AppStorage(Defaults.soundEnabled) private var soundEnabled: Bool = true
+    @Environment(\.openSettings) private var openSettings
 
     private var clockStatus: ClockStatus {
         guard engine.mode == .countdown else { return .normal }
@@ -40,10 +36,7 @@ struct MenuBarTimerPopover: View {
             .frame(height: 44)
 
             if engine.mode == .countdown {
-                HStack(spacing: 8) {
-                    loopToggle
-                    soundToggle
-                }
+                loopToggle
                 presetRow
             }
 
@@ -52,8 +45,6 @@ struct MenuBarTimerPopover: View {
             if engine.mode == .stopwatch && !engine.laps.isEmpty {
                 lapList
             }
-
-            tintSelector
 
             Divider().background(palette.border)
 
@@ -75,20 +66,9 @@ struct MenuBarTimerPopover: View {
         )
     }
 
-    private var soundToggle: some View {
-        IconToggle(
-            isOn: $soundEnabled,
-            symbol: "speaker.slash.fill",
-            activeSymbol: "speaker.wave.2.fill",
-            label: "SOUND",
-            accentWhenOn: false,
-            help: soundEnabled ? "Sound on at zero" : "Sound off at zero"
-        )
-    }
-
     private var presetRow: some View {
         HStack(spacing: 6) {
-            ForEach(Countdown.presetsMinutes, id: \.self) { minutes in
+            ForEach(Countdown.currentPresetMinutes(), id: \.self) { minutes in
                 let selected = Int(engine.countdownDuration / 60) == minutes
                     && engine.countdownDuration.truncatingRemainder(dividingBy: 60) == 0
                 Button {
@@ -204,67 +184,22 @@ struct MenuBarTimerPopover: View {
         }
     }
 
-    private var tintSelector: some View {
-        HStack(spacing: 10) {
-            Text("MENU BAR")
-                .font(KIFont.tech(9, weight: .bold))
-                .tracking(1.5)
-                .foregroundStyle(palette.textMuted)
-            Spacer()
-            ForEach(0..<TintStore.slotCount, id: \.self) { slot in
-                tintChip(slot: slot)
-            }
-        }
-    }
-
-    /// Each chip is its own customizable color slot.
-    /// - Tap to activate that slot (the menu bar overlay re-tints immediately).
-    /// - Right-click → "Edit color..." to open the system color picker for
-    ///   that specific slot. Picking a color also activates it.
-    private func tintChip(slot: Int) -> some View {
-        let selected = tintStore.activeSlot == slot
-        let ringColor = selected ? palette.textPrimary : palette.border
-        let ringWidth: CGFloat = selected ? 2 : 1
-
-        return Button {
-            if selected {
-                // Clicking the already-active slot opens the picker, so a
-                // single chip both selects and edits without hidden gestures.
-                CustomColorPickerProxy.shared.present(slot: slot, store: tintStore)
-            } else {
-                tintStore.setActiveSlot(slot)
-            }
-        } label: {
-            Circle()
-                .fill(tintStore.color(for: slot))
-                .frame(width: 18, height: 18)
-                .overlay(Circle().stroke(ringColor, lineWidth: ringWidth))
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button("Edit color…") {
-                CustomColorPickerProxy.shared.present(slot: slot, store: tintStore)
-            }
-        }
-        .help(selected ? "Click to edit color" : "Click to use this color")
-    }
-
     private var footer: some View {
-        HStack {
+        HStack(spacing: 8) {
             Button {
-                theme = (theme == .dark) ? .light : .dark
+                openSettingsFromPopover()
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: theme == .dark ? "moon.fill" : "sun.max.fill")
+                    Image(systemName: "gearshape.fill")
                         .font(.system(size: 11, weight: .semibold))
-                    Text(theme == .dark ? "DARK" : "LIGHT")
+                    Text("SETTINGS")
                         .font(KIFont.tech(10, weight: .bold))
                         .tracking(1.5)
                 }
                 .foregroundStyle(palette.textMuted)
             }
             .buttonStyle(.plain)
-            .help("Toggle light / dark mode")
+            .help("Open Settings (⌘,)")
 
             Spacer()
 
@@ -277,6 +212,14 @@ struct MenuBarTimerPopover: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private func openSettingsFromPopover() {
+        // Bring the app forward first — the menu bar popover is a
+        // nonactivating panel, so without this the Settings window opens
+        // behind whatever app was previously active.
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
     }
 
     private func showMainWindow() {

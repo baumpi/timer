@@ -7,7 +7,6 @@ struct ContentView: View {
     @AppStorage(Defaults.showShortcuts) private var showShortcuts: Bool = false
     @AppStorage(Defaults.alwaysOnTop)   private var alwaysOnTop: Bool = false
     @AppStorage(Defaults.miniMode)      private var miniMode: Bool = false
-    @AppStorage(Defaults.soundEnabled)  private var soundEnabled: Bool = true
     @State private var isFullscreen: Bool = false
     @State private var fullscreenRequestID: Int = 0
     @State private var showChrome: Bool = true
@@ -27,12 +26,7 @@ struct ContentView: View {
         return .normal
     }
 
-    private var themeIsDark: Binding<Bool> {
-        Binding(
-            get: { theme == .dark },
-            set: { theme = $0 ? .dark : .light }
-        )
-    }
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         ZStack {
@@ -66,10 +60,6 @@ struct ContentView: View {
                     withAnimation(.easeInOut(duration: 0.25)) { showChrome = true }
                 }
             }
-        }
-        .onChange(of: engine.completionCount) { _, newValue in
-            guard newValue > 0, soundEnabled else { return }
-            NSSound.beep()
         }
         .focusable()
         .focusEffectDisabled()
@@ -204,18 +194,16 @@ struct ContentView: View {
             ModeToggle(mode: $engine.mode)
             if engine.mode == .countdown {
                 loopToggle.transition(.opacity.combined(with: .scale(scale: 0.9)))
-                soundToggle.transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
             Spacer()
             if showShortcuts {
                 shortcutHints
                     .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
-            helpToggle
             pinToggle
             fullscreenToggle
             miniToggle
-            themeToggle
+            settingsButton
         }
         .animation(.easeInOut(duration: 0.2), value: showShortcuts)
         .animation(.easeInOut(duration: 0.2), value: engine.mode)
@@ -223,12 +211,21 @@ struct ContentView: View {
 
     // MARK: - Toggle factories (each is one IconToggle)
 
-    private var helpToggle: some View {
-        IconToggle(
-            isOn: $showShortcuts,
-            symbol: "questionmark",
-            help: showShortcuts ? "Hide shortcuts (?)" : "Show shortcuts (?)"
-        )
+    private var settingsButton: some View {
+        Button { openSettings() } label: {
+            Image(systemName: "gearshape.fill")
+                .font(.system(size: Layout.iconFontSize, weight: .semibold))
+                .frame(width: Layout.toggleIconSize, height: Layout.toggleIconSize)
+                .background(palette.bgSurface)
+                .foregroundStyle(palette.textSecondary)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Layout.cornerRadiusSm)
+                        .stroke(palette.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadiusSm))
+        }
+        .buttonStyle(.plain)
+        .help("Settings (⌘,)")
     }
 
     private var pinToggle: some View {
@@ -271,17 +268,6 @@ struct ContentView: View {
         )
     }
 
-    private var themeToggle: some View {
-        IconToggle(
-            isOn: themeIsDark,
-            symbol: "sun.max.fill",
-            activeSymbol: "moon.fill",
-            label: theme == .dark ? "DARK" : "LIGHT",
-            accentWhenOn: false,
-            help: "Toggle light / dark mode (L)"
-        )
-    }
-
     private var loopToggle: some View {
         IconToggle(
             isOn: $engine.repeats,
@@ -289,16 +275,6 @@ struct ContentView: View {
             label: "LOOP",
             help: engine.repeats ? "Loop on — countdown restarts at zero"
                                  : "Loop off — countdown stops at zero"
-        )
-    }
-
-    private var soundToggle: some View {
-        IconToggle(
-            isOn: $soundEnabled,
-            symbol: "speaker.slash.fill",
-            activeSymbol: "speaker.wave.2.fill",
-            accentWhenOn: false,
-            help: soundEnabled ? "Sound on at zero" : "Sound off at zero"
         )
     }
 
@@ -403,7 +379,7 @@ struct ContentView: View {
 
     private var presetStrip: some View {
         HStack(spacing: 8) {
-            ForEach(Countdown.presetsMinutes, id: \.self) { minutes in
+            ForEach(Countdown.currentPresetMinutes(), id: \.self) { minutes in
                 compactButton(
                     title: "\(minutes) MIN",
                     isSelected: Int(engine.countdownDuration / 60) == minutes && engine.countdownDuration.truncatingRemainder(dividingBy: 60) == 0,
