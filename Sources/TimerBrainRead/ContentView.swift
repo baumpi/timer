@@ -2,17 +2,21 @@ import SwiftUI
 import AppKit
 
 struct ContentView: View {
-    @StateObject private var engine = TimerEngine()
-    @AppStorage("themeMode")        private var theme: ThemeMode = .dark
-    @AppStorage("showShortcuts")    private var showShortcuts: Bool = false
-    @AppStorage("countdownRepeats") private var repeats: Bool = false
-    @AppStorage("timerMode")        private var savedMode: String = TimerMode.stopwatch.rawValue
-    @AppStorage("alwaysOnTop")      private var alwaysOnTop: Bool = false
-    @AppStorage("miniMode")         private var miniMode: Bool = false
-    @AppStorage("soundEnabled")     private var soundEnabled: Bool = true
+    @EnvironmentObject private var engine: TimerEngine
+    @AppStorage(Defaults.themeMode)     private var theme: ThemeMode = .dark
+    @AppStorage(Defaults.showShortcuts) private var showShortcuts: Bool = false
+    @AppStorage(Defaults.alwaysOnTop)   private var alwaysOnTop: Bool = false
+    @AppStorage(Defaults.miniMode)      private var miniMode: Bool = false
+    @AppStorage(Defaults.soundEnabled)  private var soundEnabled: Bool = true
     @State private var isFullscreen: Bool = false
     @State private var fullscreenRequestID: Int = 0
+    @State private var showChrome: Bool = true
+    @State private var idleHideTask: Task<Void, Never>?
     @FocusState private var keyFocus: Bool
+
+    private static let chromeIdleDelay: Duration = .milliseconds(900)
+    private static let chromeFadeOnStartDelay: Duration = .milliseconds(450)
+    private static let chromeFadeOnLeaveDelay: Duration = .milliseconds(180)
 
     private var palette: Palette { Palette.from(theme) }
     private var clockEditable: Bool { engine.mode == .countdown && !engine.isRunning }
@@ -35,6 +39,8 @@ struct ContentView: View {
             palette.bgApp.ignoresSafeArea()
             if miniMode { miniLayout } else { normalLayout }
         }
+        .contentShape(Rectangle())
+        .onContinuousHover { phase in handleHover(phase) }
         .frame(
             minWidth:  miniMode ? Layout.miniMinSize.width  : Layout.normalMinSize.width,
             minHeight: miniMode ? Layout.miniMinSize.height : Layout.normalMinSize.height
@@ -46,14 +52,21 @@ struct ContentView: View {
                                    onFullscreenChange: handleFullscreenChange))
         .onAppear {
             BundledFonts.register()
-            engine.repeats = repeats
-            if let m = TimerMode(rawValue: savedMode), m != engine.mode {
-                engine.mode = m
-            }
             keyFocus = true
         }
-        .onChange(of: repeats)     { _, newValue in engine.repeats = newValue }
-        .onChange(of: engine.mode) { _, newMode  in savedMode = newMode.rawValue }
+        .onChange(of: engine.mode) { _, _ in bumpChrome() }
+        .onChange(of: engine.isRunning) { _, isRunning in
+            // Hide chrome quickly on start; restore it instantly on pause.
+            if isRunning {
+                bumpChrome(fastFade: true)
+            } else {
+                idleHideTask?.cancel()
+                idleHideTask = nil
+                if !showChrome {
+                    withAnimation(.easeInOut(duration: 0.25)) { showChrome = true }
+                }
+            }
+        }
         .onChange(of: engine.completionCount) { _, newValue in
             guard newValue > 0, soundEnabled else { return }
             NSSound.beep()
@@ -70,19 +83,61 @@ struct ContentView: View {
     // MARK: - Keyboard
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        let result: KeyPress.Result
         switch press.characters.lowercased() {
-        case " ":       engine.toggle();              return .handled
-        case "r":       engine.reset();               return .handled
+        case " ":       engine.toggle();              result = .handled
+        case "r":       engine.reset();               result = .handled
         case "m":       engine.mode = (engine.mode == .stopwatch) ? .countdown : .stopwatch
-                                                      ; return .handled
-        case "f":       toggleFullscreen();           return .handled
-        case "l":       theme = (theme == .dark) ? .light : .dark; return .handled
-        case "t":       alwaysOnTop.toggle();         return .handled
-        case "i":       toggleMiniMode();             return .handled
-        case "?":       showShortcuts.toggle();       return .handled
-        case "+", "=":  engine.adjustCountdown(by:  Countdown.stepSeconds); return .handled
-        case "-", "_":  engine.adjustCountdown(by: -Countdown.stepSeconds); return .handled
+                                                      ; result = .handled
+        case "f":       toggleFullscreen();           result = .handled
+        case "l":       theme = (theme == .dark) ? .light : .dark; result = .handled
+        case "t":       alwaysOnTop.toggle();         result = .handled
+        case "i":       toggleMiniMode();             result = .handled
+        case "?":       showShortcuts.toggle();       result = .handled
+        case "+", "=":  engine.adjustCountdown(by:  Countdown.stepSeconds); result = .handled
+        case "-", "_":  engine.adjustCountdown(by: -Countdown.stepSeconds); result = .handled
         default:        return .ignored
+        }
+        bumpChrome()
+        return result
+    }
+
+    // MARK: - Chrome auto-hide
+
+    private func bumpChrome(fastFade: Bool = false) {
+        idleHideTask?.cancel()
+        idleHideTask = nil
+        if !showChrome {
+            withAnimation(.easeInOut(duration: 0.35)) { showChrome = true }
+        }
+        guard engine.isRunning else { return }
+        let delay: Duration = fastFade ? Self.chromeFadeOnStartDelay : Self.chromeIdleDelay
+        idleHideTask = Task { @MainActor in
+            try? await Task.sleep(for: delay)
+            if !Task.isCancelled && engine.isRunning {
+                withAnimation(.easeInOut(duration: 0.45)) { showChrome = false }
+            }
+        }
+    }
+
+    private func handleHover(_ phase: HoverPhase) {
+        switch phase {
+        case .active:
+            bumpChrome()
+        case .ended:
+            // Mouse left the window — drop chrome quickly while running so we
+            // don't sit on a fully-visible UI just because the cursor grazed
+            // the window on its way somewhere else.
+            guard engine.isRunning, showChrome else { return }
+            idleHideTask?.cancel()
+            idleHideTask = Task { @MainActor in
+                try? await Task.sleep(for: Self.chromeFadeOnLeaveDelay)
+                if !Task.isCancelled && engine.isRunning {
+                    withAnimation(.easeInOut(duration: 0.35)) { showChrome = false }
+                }
+            }
+        @unknown default:
+            break
         }
     }
 
@@ -93,6 +148,7 @@ struct ContentView: View {
             topBar
                 .padding(.top, 18)
                 .padding(.horizontal, 28)
+                .modifier(ChromeFade(visible: showChrome))
 
             Spacer(minLength: 12)
 
@@ -108,6 +164,7 @@ struct ContentView: View {
             secondaryStrip
                 .padding(.top, 10)
                 .padding(.horizontal, 32)
+                .modifier(ChromeFade(visible: showChrome))
 
             Spacer(minLength: 10)
 
@@ -136,6 +193,7 @@ struct ContentView: View {
             }
                 .padding(.top, 8)
                 .padding(.trailing, 8)
+                .modifier(ChromeFade(visible: showChrome))
         }
     }
 
@@ -226,11 +284,11 @@ struct ContentView: View {
 
     private var loopToggle: some View {
         IconToggle(
-            isOn: $repeats,
+            isOn: $engine.repeats,
             symbol: "arrow.triangle.2.circlepath",
             label: "LOOP",
-            help: repeats ? "Loop on — countdown restarts at zero"
-                          : "Loop off — countdown stops at zero"
+            help: engine.repeats ? "Loop on — countdown restarts at zero"
+                                 : "Loop off — countdown stops at zero"
         )
     }
 
@@ -279,19 +337,8 @@ struct ContentView: View {
 
     private var controlBar: some View {
         HStack(spacing: 14) {
-            if engine.mode == .countdown {
-                ControlButton(title: "−1 MIN", variant: .secondary, minWidth: 110) {
-                    engine.adjustCountdown(by: -Countdown.stepSeconds)
-                }
-                .disabled(engine.isRunning || engine.countdownDuration <= Countdown.stepSeconds)
-                .opacity((engine.isRunning || engine.countdownDuration <= Countdown.stepSeconds) ? 0.4 : 1)
-            } else {
-                ControlButton(title: "LAP", variant: .secondary, minWidth: 110) {
-                    engine.recordLap()
-                }
-                .disabled(engine.displaySeconds <= 0)
-                .opacity(engine.displaySeconds <= 0 ? 0.4 : 1)
-            }
+            secondaryLeftButton
+                .modifier(ChromeFade(visible: showChrome))
 
             Spacer(minLength: 0)
 
@@ -307,16 +354,39 @@ struct ContentView: View {
 
             Spacer(minLength: 0)
 
-            if engine.mode == .countdown {
-                ControlButton(title: "+1 MIN", variant: .secondary, minWidth: 110) {
-                    engine.adjustCountdown(by: Countdown.stepSeconds)
-                }
-                .disabled(engine.isRunning || engine.countdownDuration >= Countdown.maxSeconds)
-                .opacity((engine.isRunning || engine.countdownDuration >= Countdown.maxSeconds) ? 0.4 : 1)
-            } else {
-                Color.clear
-                    .frame(width: 110, height: Layout.buttonHeight)
+            secondaryRightButton
+                .modifier(ChromeFade(visible: showChrome))
+        }
+    }
+
+    @ViewBuilder
+    private var secondaryLeftButton: some View {
+        if engine.mode == .countdown {
+            ControlButton(title: "−1 MIN", variant: .secondary, minWidth: 110) {
+                engine.adjustCountdown(by: -Countdown.stepSeconds)
             }
+            .disabled(engine.isRunning || engine.countdownDuration <= Countdown.stepSeconds)
+            .opacity((engine.isRunning || engine.countdownDuration <= Countdown.stepSeconds) ? 0.4 : 1)
+        } else {
+            ControlButton(title: "LAP", variant: .secondary, minWidth: 110) {
+                engine.recordLap()
+            }
+            .disabled(engine.displaySeconds <= 0)
+            .opacity(engine.displaySeconds <= 0 ? 0.4 : 1)
+        }
+    }
+
+    @ViewBuilder
+    private var secondaryRightButton: some View {
+        if engine.mode == .countdown {
+            ControlButton(title: "+1 MIN", variant: .secondary, minWidth: 110) {
+                engine.adjustCountdown(by: Countdown.stepSeconds)
+            }
+            .disabled(engine.isRunning || engine.countdownDuration >= Countdown.maxSeconds)
+            .opacity((engine.isRunning || engine.countdownDuration >= Countdown.maxSeconds) ? 0.4 : 1)
+        } else {
+            Color.clear
+                .frame(width: 110, height: Layout.buttonHeight)
         }
     }
 
@@ -447,6 +517,17 @@ struct ContentView: View {
         if fullscreen && miniMode {
             miniMode = false
         }
+    }
+}
+
+// MARK: - Chrome fade modifier
+
+private struct ChromeFade: ViewModifier {
+    let visible: Bool
+    func body(content: Content) -> some View {
+        content
+            .opacity(visible ? 1 : 0)
+            .allowsHitTesting(visible)
     }
 }
 

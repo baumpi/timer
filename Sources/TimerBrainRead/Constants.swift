@@ -34,6 +34,31 @@ enum Countdown {
     static let maxSeconds: TimeInterval = 99 * 60 + 59  // 99:59
     static let stepSeconds: TimeInterval = 60           // ±1 MIN button
     static let defaultSeconds: TimeInterval = 600       // 10:00
-    static let warningSeconds: TimeInterval = 60
+    static let warningSeconds: TimeInterval = 30   // strong urgency
+    static let cautionSeconds: TimeInterval = 60   // soft heads-up
     static let presetsMinutes = [5, 10, 25]
+}
+
+/// Single source of truth for every UserDefaults key the app reads or writes.
+/// Pass these to `@AppStorage(...)` and to direct `UserDefaults` calls so that
+/// a typo at one call site can never silently create a parallel key.
+enum Defaults {
+    static let themeMode         = "themeMode"
+    static let showShortcuts     = "showShortcuts"
+    static let alwaysOnTop       = "alwaysOnTop"
+    static let miniMode          = "miniMode"
+    static let soundEnabled      = "soundEnabled"
+    static let timerMode         = "timerMode"
+    static let countdownRepeats  = "countdownRepeats"
+    static let countdownDuration       = "countdownDurationSecs"
+    static let menuBarTintActiveSlot   = "menuBarTintActiveSlot"
+
+    /// Per-slot color storage key. Each slot is a 24-bit sRGB hex stored as an Int.
+    static func menuBarTintSlot(_ index: Int) -> String {
+        "menuBarTintSlot\(index)"
+    }
+}
+
+enum AppInfo {
+    static let mainWindowTitle = "Wura Timer"
 }
