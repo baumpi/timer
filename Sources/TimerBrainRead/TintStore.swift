@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import Foundation
 
 /// Single source of truth for the menu bar overlay tint.
 ///
@@ -22,12 +23,31 @@ final class TintStore: ObservableObject {
         0x4F46E5,  // indigo
     ]
 
-    @Published private(set) var activeSlot: Int
-    @Published private(set) var slotHexes: [UInt32]
+    @Published private(set) var activeSlot: Int = 0
+    @Published private(set) var slotHexes: [UInt32] = TintStore.defaultHexes
+
+    private var importObserver: NSObjectProtocol?
 
     init() {
-        let defaults = UserDefaults.standard
+        reloadFromDefaults()
+        // Settings import / Reset writes the persistence layer directly,
+        // bypassing setActiveSlot / setSlotColor — pick those changes up
+        // so the menu bar overlay refreshes without an app restart.
+        importObserver = NotificationCenter.default.addObserver(
+            forName: .wuraTimerSettingsApplied,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reloadFromDefaults() }
+        }
+    }
 
+    deinit {
+        if let importObserver { NotificationCenter.default.removeObserver(importObserver) }
+    }
+
+    private func reloadFromDefaults() {
+        let defaults = UserDefaults.standard
         var hexes: [UInt32] = []
         for i in 0..<Self.slotCount {
             let key = Defaults.menuBarTintSlot(i)
@@ -37,10 +57,11 @@ final class TintStore: ObservableObject {
                 hexes.append(Self.defaultHexes[i])
             }
         }
-        self.slotHexes = hexes
+        if hexes != slotHexes { slotHexes = hexes }
 
         let rawActive = defaults.integer(forKey: Defaults.menuBarTintActiveSlot)
-        self.activeSlot = max(0, min(Self.slotCount - 1, rawActive))
+        let clamped = max(0, min(Self.slotCount - 1, rawActive))
+        if clamped != activeSlot { activeSlot = clamped }
     }
 
     var activeColor: Color {

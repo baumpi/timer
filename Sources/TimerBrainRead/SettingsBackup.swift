@@ -5,6 +5,13 @@ import UniformTypeIdentifiers
 /// configure from the Settings window. JSON-based so files are diffable and
 /// shareable. Custom sound files are NOT exported — only the filename
 /// reference; the user re-imports them on the new machine.
+extension Notification.Name {
+    /// Posted whenever Settings export/import or Reset mutates the
+    /// UserDefaults snapshot. Stores that cache prefs in-memory (TintStore,
+    /// TimerEngine) listen so the live UI matches without an app restart.
+    static let wuraTimerSettingsApplied = Notification.Name("WuraTimer.SettingsApplied")
+}
+
 @MainActor
 enum SettingsBackup {
     private static let fileType = UTType.json
@@ -60,6 +67,8 @@ enum SettingsBackup {
             defaults.removeObject(forKey: key)
         }
         CustomSoundStore.clear()
+        LaunchAtLogin.set(false)
+        NotificationCenter.default.post(name: .wuraTimerSettingsApplied, object: nil)
     }
 
     // MARK: - Internals
@@ -90,6 +99,13 @@ enum SettingsBackup {
                 defaults.set(v, forKey: key)
             }
         }
+        // Sync system-side state that doesn't follow from a UserDefaults
+        // write alone, then notify the in-memory stores (TintStore,
+        // TimerEngine) so the live UI updates without an app restart.
+        if let wantsLogin = dict[Defaults.launchAtLogin] as? Bool {
+            LaunchAtLogin.set(wantsLogin)
+        }
+        NotificationCenter.default.post(name: .wuraTimerSettingsApplied, object: nil)
     }
 
     private static func presentError(_ message: String, error: Error) {

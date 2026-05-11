@@ -89,6 +89,47 @@ final class TimerEngine: ObservableObject {
             let saved = defaults.bool(forKey: Defaults.countdownRepeats)
             if saved != repeats { self.repeats = saved }
         }
+
+        // Settings import / Reset writes UserDefaults directly; pull the
+        // changes back into the engine so an idle timer reflects the new
+        // duration without an app restart. A running timer is left alone
+        // — interrupting it mid-tick would be hostile.
+        importObserver = NotificationCenter.default.addObserver(
+            forName: .wuraTimerSettingsApplied,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reloadFromDefaults() }
+        }
+    }
+
+    private var importObserver: NSObjectProtocol?
+
+    deinit {
+        if let importObserver { NotificationCenter.default.removeObserver(importObserver) }
+    }
+
+    private func reloadFromDefaults() {
+        guard !isRunning else { return }
+        let defaults = UserDefaults.standard
+
+        let raw = defaults.double(forKey: Defaults.countdownDuration)
+        let candidate: TimeInterval = (raw >= Countdown.minSeconds && raw <= Countdown.maxSeconds)
+            ? raw
+            : defaults.double(forKey: Defaults.defaultCountdownDuration)
+        if candidate >= Countdown.minSeconds && candidate <= Countdown.maxSeconds {
+            countdownDuration = candidate
+        }
+
+        if let modeRaw = defaults.string(forKey: Defaults.timerMode),
+           let saved = TimerMode(rawValue: modeRaw),
+           saved != mode {
+            mode = saved
+        }
+        if defaults.object(forKey: Defaults.countdownRepeats) != nil {
+            let saved = defaults.bool(forKey: Defaults.countdownRepeats)
+            if saved != repeats { repeats = saved }
+        }
     }
 
     private var startedAt: Date?
