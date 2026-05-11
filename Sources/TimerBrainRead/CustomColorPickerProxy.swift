@@ -33,6 +33,11 @@ final class CustomColorPickerProxy: NSObject {
         panel.setAction(#selector(colorChanged(_:)))
         panel.isContinuous = true
         panel.showsAlpha = false
+        // Keep the panel above the menu bar popover and any other windows so
+        // it can't be auto-hidden by the popover's key-loss dismissal.
+        panel.level = .floating
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
 
         let startingHex = store.hex(for: slot)
         panel.color = NSColor(
@@ -41,7 +46,20 @@ final class CustomColorPickerProxy: NSObject {
             blue:    CGFloat( startingHex        & 0xFF) / 255,
             alpha: 1
         )
-        panel.makeKeyAndOrderFront(nil)
+
+        // The menu bar popover (`.menuBarExtraStyle(.window)`) is a
+        // nonactivating NSPanel that auto-dismisses on key loss. A short
+        // delay lets the popover fully tear down before we activate the app
+        // and order the color panel front, otherwise focus races back to the
+        // menu bar and the picker disappears. We use NSRunningApplication
+        // because `NSApp.activate` is unreliable for accessory-style menu
+        // bar interactions.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSRunningApplication.current.activate(options: [.activateAllWindows])
+            NSApp.activate(ignoringOtherApps: true)
+            panel.orderFrontRegardless()
+            panel.makeKeyAndOrderFront(nil)
+        }
     }
 
     @objc private func colorChanged(_ sender: Any?) {

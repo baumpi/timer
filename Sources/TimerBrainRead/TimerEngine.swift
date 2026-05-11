@@ -68,6 +68,13 @@ final class TimerEngine: ObservableObject {
         let savedDuration = defaults.double(forKey: Defaults.countdownDuration)
         if savedDuration >= Countdown.minSeconds && savedDuration <= Countdown.maxSeconds {
             self._countdownDuration = savedDuration
+        } else {
+            // Fall back to the user's configured default if no per-session
+            // value has been persisted yet.
+            let defaultDuration = defaults.double(forKey: Defaults.defaultCountdownDuration)
+            if defaultDuration >= Countdown.minSeconds && defaultDuration <= Countdown.maxSeconds {
+                self._countdownDuration = defaultDuration
+            }
         }
 
         // Only assign when the persisted value differs from the property's
@@ -182,6 +189,7 @@ final class TimerEngine: ObservableObject {
 
     private func finishCountdown(elapsed: TimeInterval) {
         completionCount += 1
+        playCompletionSoundIfEnabled()
         if repeats {
             let duration = max(Countdown.minSeconds, countdownDuration)
             let remainder = elapsed.truncatingRemainder(dividingBy: duration)
@@ -196,6 +204,17 @@ final class TimerEngine: ObservableObject {
             accumulated = 0
             isFinished = true
         }
+    }
+
+    private func playCompletionSoundIfEnabled() {
+        // Live next to the timer rather than a SwiftUI .onChange observer
+        // because the observer only fires while its host view is on screen.
+        // Driving the timer from the menu bar with the main window closed
+        // would otherwise produce no sound.
+        let defaults = UserDefaults.standard
+        let enabled = defaults.object(forKey: Defaults.soundEnabled) as? Bool ?? true
+        guard enabled else { return }
+        CompletionSound.current().play()
     }
 
     private func setDisplaySeconds(_ seconds: TimeInterval) {

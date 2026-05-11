@@ -26,19 +26,48 @@ final class MenuBarOverlayController {
     private var windows: [NSWindow] = []
     private var cancellables: Set<AnyCancellable> = []
 
+    private var lastEnabled: Bool = true
+
     init(engine: TimerEngine, tintStore: TintStore) {
         self.engine = engine
         self.tintStore = tintStore
+        self.lastEnabled = Self.readEnabled()
         NotificationCenter.default
             .publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in self?.rebuild() }
             .store(in: &cancellables)
+        // React to the user enabling/disabling the menu bar tint from
+        // Settings. UserDefaults posts didChangeNotification on every write
+        // — including each slider tick — so we only rebuild when the
+        // *enabled* flag actually flips. Other prefs (opacity, label
+        // format, accent) are read reactively inside the SwiftUI overlay
+        // view via @AppStorage, so they don't need a window rebuild.
+        NotificationCenter.default
+            .publisher(for: UserDefaults.didChangeNotification)
+            .sink { [weak self] _ in self?.enabledMightHaveChanged() }
+            .store(in: &cancellables)
         rebuild()
     }
+
+    private func enabledMightHaveChanged() {
+        let now = Self.readEnabled()
+        guard now != lastEnabled else { return }
+        lastEnabled = now
+        rebuild()
+    }
+
+    private static func readEnabled() -> Bool {
+        // Default to true so existing installs keep the overlay they had
+        // before this preference existed.
+        UserDefaults.standard.object(forKey: Defaults.menuBarOverlayEnabled) as? Bool ?? true
+    }
+
+    private var isEnabled: Bool { lastEnabled }
 
     private func rebuild() {
         for win in windows { win.orderOut(nil) }
         windows.removeAll()
+        guard isEnabled else { return }
         for screen in NSScreen.screens {
             for frame in barSegments(for: screen) {
                 if let win = makeWindow(frame: frame, screen: screen) {
@@ -112,15 +141,17 @@ private struct MenuBarOverlayView: View {
     let hasNotch: Bool
 
     @State private var pulsePhase: Double = 0
-    private static let flashWindowSeconds: TimeInterval = 3
+    @AppStorage(Defaults.disablePulse)        private var disablePulse: Bool = false
+    @AppStorage(Defaults.menuBarTintOpacity)  private var tintOpacityMultiplier: Double = 1.0
 
     private var tintColor: Color { tintStore.activeColor }
 
     private var shouldFlash: Bool {
-        engine.mode == .countdown
+        !disablePulse
+            && engine.mode == .countdown
             && engine.isRunning
             && engine.displaySeconds > 0
-            && engine.displaySeconds <= Self.flashWindowSeconds
+            && engine.displaySeconds <= Countdown.flashWindowSeconds
     }
 
     private func updatePulse(_ on: Bool) {
@@ -188,15 +219,21 @@ private struct MenuBarOverlayView: View {
         .onAppear { updatePulse(shouldFlash) }
     }
 
+    private var opacityScale: Double {
+        max(0.0, min(1.0, tintOpacityMultiplier))
+    }
+
     private var baselineOpacity: Double {
-        engine.mode == .countdown ? 0.04 : 0
+        (engine.mode == .countdown ? 0.04 : 0) * opacityScale
     }
 
     private var fillOpacity: Double {
         guard engine.mode == .countdown else { return 0 }
-        if engine.isFinished { return 0.40 }
-        if engine.displaySeconds <= Countdown.warningSeconds { return 0.32 }
-        if engine.displaySeconds <= Countdown.cautionSeconds { return 0.26 }
-        return 0.20
+        let raw: Double
+        if engine.isFinished { raw = 0.40 }
+        else if engine.displaySeconds <= Countdown.warningSeconds { raw = 0.32 }
+        else if engine.displaySeconds <= Countdown.cautionSeconds { raw = 0.26 }
+        else { raw = 0.20 }
+        return raw * opacityScale
     }
 }

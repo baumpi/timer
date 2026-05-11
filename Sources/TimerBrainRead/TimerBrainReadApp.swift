@@ -38,6 +38,13 @@ struct TimerBrainReadApp: App {
             MenuBarTimerLabel(engine: engine)
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+                .environmentObject(tintStore)
+                .environment(\.palette, Palette.from(theme))
+                .preferredColorScheme(theme == .dark ? .dark : .light)
+        }
     }
 
     private func ensureOverlayController() {
